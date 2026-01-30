@@ -2,104 +2,822 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 스타일 카메라 앱</title>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI Style Studio - A6 Edition</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+            "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+            "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+            "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+        }
+    }
+    </script>
+
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
     <style>
-        body { margin: 0; padding: 0; background-color: #000; color: white; overflow-x: hidden; }
-        .canvas-container { position: relative; width: 100%; max-width: 500px; margin: 0 auto; }
-        video, canvas { width: 100%; border-radius: 12px; }
+        /* 폰트 및 스크롤바 숨김 등 커스텀 스타일 */
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        body { font-family: 'Pretendard', sans-serif; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes orbit { 0% { transform: rotate(0deg) translateX(50px) rotate(0deg); } 100% { transform: rotate(360deg) translateX(50px) rotate(-360deg); } }
+        @keyframes orbit-reverse { 0% { transform: rotate(360deg) translateX(70px) rotate(-360deg); } 100% { transform: rotate(0deg) translateX(70px) rotate(0deg); } }
+        @keyframes pulse-glow { 0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px rgba(99, 102, 241, 0.3)); } 50% { transform: scale(1.1); filter: drop-shadow(0 0 20px rgba(168, 85, 247, 0.6)); } }
+        @keyframes float-up { 0% { transform: translateY(20px); opacity: 0; } 50% { opacity: 1; } 100% { transform: translateY(-40px); opacity: 0; } }
     </style>
 </head>
-<body>
+<body class="bg-gray-50 text-slate-800">
     <div id="root"></div>
 
-    <script type="text/babel">
-        const { useState, useRef, useEffect } = React;
+    <script type="text/babel" data-type="module">
+        import React, { useState, useRef, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Upload, Image as ImageIcon, Download, X, Check, Loader2, Maximize2, Palette, Sparkles, Zap, Paintbrush, RotateCcw, Clock, Trash2, ChevronLeft, ChevronRight, Printer, QrCode, Smartphone, Camera, ExternalLink, Lock, Settings } from 'lucide-react';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+        import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-        function App() {
-            const videoRef = useRef(null);
-            const canvasRef = useRef(null);
-            const [isCameraReady, setIsCameraReady] = useState(false);
-            const [capturedImage, setCapturedImage] = useState(null);
+        // --- Preset Styles ---
+        const PRESET_STYLES = [
+            {   id: 'vangogh', name: '반 고흐 (Van Gogh)', prompt: 'Vincent Van Gogh style masterpiece. Subject: Portrait painted with heavy impasto technique, visible brushstrokes on skin, vibrant ochre and green shadows. Background: Swirling starry night sky or vibrant wheat fields in Van Gogh style. Overall: Thick texture, dynamic movement, expressionist emotional art.' },
+            {   id: 'ghibli', name: '지브리 (Ghibli)', prompt: 'Studio Ghibli anime movie screenshot, Hayao Miyazaki art style. Subject: Redraw person as a Ghibli character with simple facial features, expressive eyes, and soft shading. Background: Highly detailed hand-painted lush nature or European town with fluffy cumulus clouds. Atmosphere: Nostalgic, peaceful, and magical high-quality animation.' },
+            {   id: 'cyberpunk', name: '사이버펑크 (Cyberpunk)', prompt: 'Hardcore Cyberpunk aesthetic. Subject: Transform into a futuristic cyborg with glowing neon circuit lines on skin, metallic implants, and high-tech visor. Background: Dystopian night city with towering skyscrapers, holograms, and neon rain. Lighting: Cinematic volumetric neon lighting (cyan and magenta), high contrast.' },
+            {   id: 'watercolor', name: '수채화 (Watercolor)', prompt: 'Artistic watercolor painting. Subject: Portrait painted with delicate watercolor washes, clearly defined edges (wet-on-dry), and subtle paper texture showing through. Background: Soft, abstract watercolor stains and splashes in harmonious colors. Overall: Elegant, hand-crafted, translucent and airy feel, no messy drips.' },
+            {   id: 'oilpaint', name: '유화 (Oil Painting)', prompt: 'Classic Renaissance oil painting. Subject: Realistic portrait with dramatic chiaroscuro lighting (Rembrandt style), rich skin textures, and deep shadows. Background: Dark, moody, or detailed landscape in classic oil style. Texture: Visible canvas weave, cracked paint varnish, museum quality masterpiece.' },
+            {   id: 'popart', name: '팝 아트 (Pop Art)', prompt: 'Pop Art masterpiece (Roy Lichtenstein style). Subject: Stylized with extremely thick black outlines, flat vibrant skin tones, and exaggerated Ben-Day dots for shading. Background: Bold geometric patterns or solid bright colors. Aesthetic: Comic book style, high contrast, retro 1960s commercial art, bold and graphic.' },
+            {   id: 'ukiyo', name: '우키요에 (Ukiyo-e)', prompt: 'Traditional Japanese Ukiyo-e woodblock print (Hokusai style). Subject: Portrait drawn with varying line weights, flat colors, and traditional oriental beauty aesthetics. Background: Stylized waves, Mt. Fuji, or traditional patterns. Texture: Washi paper texture and wood grain impression, flat perspective.' },
+            {   id: 'sketch', name: '연필 스케치 (Sketch)', prompt: 'Graphite pencil sketch on rough paper. Subject: Realistic drawing with strong cross-hatching shading, sharp defined contours, and smudge effects. Background: Loosely sketched or rough textured shading. Style: Monochrome, raw, artistic, and detailed hand-drawn illustration.' },
+            {   id: 'sepia', name: '오래된 사진 (Vintage)', prompt: 'Authentic 19th-century vintage photograph (Daguerreotype). Subject: Portrait with high contrast, motion blur, and period-appropriate feel. Effect: Heavy sepia toning, significant film grain, dust scratches, vignette, and damaged edges. Atmosphere: Ghostly, historical, and nostalgic.' },
+            {   id: 'modernanime', name: '일본 애니 (Modern Anime)', prompt: 'Modern high-end anime art (Makoto Shinkai style). Subject: High-quality anime character design with detailed eyes, sharp hair highlights, and emotional expression. Background: Photorealistic urban or nature setting with breathtaking cinematic lighting and lens flares. Resolution: 8k wallpaper quality, vibrant and crystal clear.' },
+            {   id: 'boldcartoon', name: '카툰 (Bold Cartoon)', prompt: 'Western Saturday morning cartoon style. Subject: Caricature-like transformation with exaggerated features, extremely thick black outlines, and flat solid colors. Background: Simple, colorful, and graphic. Vibe: Energetic, fun, bouncy, vector art aesthetic.' },
+            {   id: 'inkwash', name: '수묵화 (Ink Wash)', prompt: 'Traditional Korean Su-mukhwa (Ink Wash Painting). Subject: Painted with varying shades of black ink, utilizing bold brushstrokes for hair and delicate lines for the face. Background: Minimalist mountains or bamboo with mist (Yeobaek - beauty of emptiness). Style: Strictly Black and White, ink spreading on Hwaseonji paper texture.' },
+        ];
 
-            // 카메라 시작 로직
-            useEffect(() => {
-                async function setupCamera() {
+        // --- Config Modal Component ---
+        const ConfigModal = ({ onSave, onClose, initialKey, initialConfig }) => {
+            const [apiKey, setApiKey] = useState(initialKey || '');
+            const [firebaseConfigStr, setFirebaseConfigStr] = useState(initialConfig ? JSON.stringify(initialConfig, null, 2) : '');
+
+            const handleSave = () => {
+                let parsedConfig = null;
+                if (firebaseConfigStr) {
                     try {
-                        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-                        if (videoRef.current) {
-                            videoRef.current.srcObject = stream;
-                            setIsCameraReady(true);
-                        }
-                    } catch (err) {
-                        console.error("카메라 접근 에러:", err);
-                        alert("카메라 권한을 허용해주세요.");
+                        parsedConfig = JSON.parse(firebaseConfigStr);
+                    } catch (e) {
+                        alert("Firebase 설정이 올바른 JSON 형식이 아닙니다.");
+                        return;
                     }
                 }
-                setupCamera();
-            }, []);
-
-            const takePhoto = () => {
-                const video = videoRef.current;
-                const canvas = canvasRef.current;
-                if (video && canvas) {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    canvas.getContext('2d').drawImage(video, 0, 0);
-                    setCapturedImage(canvas.toDataURL('image/png'));
-                }
+                onSave(apiKey, parsedConfig);
             };
 
             return (
-                <div className="flex flex-col items-center p-4 min-h-screen">
-                    <header className="mb-6 text-center">
-                        <h1 className="text-3xl font-bold text-yellow-400">AI STYLE CAMERA</h1>
-                        <p className="text-sm text-gray-400">전시장에서 즐기는 AI 스타일 변환</p>
-                    </header>
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl overflow-y-auto max-h-[90vh]">
+                        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                            <Settings className="text-indigo-600"/> 설정
+                        </h2>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-bold text-gray-700 mb-1">Google Gemini API Key</label>
+                                <input 
+                                    type="password" 
+                                    value={apiKey} 
+                                    onChange={(e) => setApiKey(e.target.value)}
+                                    placeholder="AI Studio에서 발급받은 키 입력"
+                                    className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                                />
+                                <p className="text-xs text-gray-400 mt-1">키는 브라우저에만 저장됩니다.</p>
+                            </div>
 
-                    <div className="canvas-container shadow-2xl border-2 border-gray-700 p-2 bg-gray-900 rounded-xl">
-                        {!capturedImage ? (
-                            <video ref={videoRef} autoPlay playsInline />
-                        ) : (
-                            <img src={capturedImage} alt="Captured" className="rounded-lg" />
-                        )}
-                    </div>
+                            <div>
+                                <label className="block text-sm font-bold text-gray-700 mb-1">Firebase Config (JSON)</label>
+                                <textarea 
+                                    value={firebaseConfigStr}
+                                    onChange={(e) => setFirebaseConfigStr(e.target.value)}
+                                    placeholder='{"apiKey": "...", "authDomain": "...", ...}'
+                                    className="w-full h-40 p-3 border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                                />
+                                <p className="text-xs text-gray-400 mt-1">QR 업로드 기능을 사용하려면 Firebase 설정이 필요합니다.</p>
+                            </div>
+                        </div>
 
-                    <div className="mt-8 flex gap-4">
-                        {!capturedImage ? (
-                            <button 
-                                onClick={takePhoto}
-                                className="bg-white text-black px-8 py-4 rounded-full font-bold text-lg active:scale-95 transition-transform"
-                            >
-                                📸 사진 촬영
-                            </button>
-                        ) : (
-                            <button 
-                                onClick={() => setCapturedImage(null)}
-                                className="bg-red-500 text-white px-8 py-4 rounded-full font-bold text-lg"
-                            >
-                                🔄 다시 찍기
-                            </button>
-                        )}
-                    </div>
-
-                    {/* 스타일 선택 영역 (예시) */}
-                    <div className="mt-10 grid grid-cols-3 gap-3 w-full max-w-md">
-                        {['고흐', '지브리', '수채화'].map(style => (
-                            <button key={style} className="bg-gray-800 p-3 rounded-lg text-xs hover:bg-yellow-600 transition-colors">
-                                {style} 스타일
-                            </button>
-                        ))}
+                        <div className="flex justify-end gap-2 mt-6">
+                            <button onClick={onClose} className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded-lg">닫기</button>
+                            <button onClick={handleSave} className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700">저장하기</button>
+                        </div>
                     </div>
                 </div>
             );
-        }
+        };
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
+        // --- Fun Loader Component ---
+        const FunLoader = () => (
+            <div className="flex flex-col items-center justify-center p-8 w-full h-64 overflow-hidden relative bg-gray-50/50 rounded-xl border border-gray-100">
+                <div className="relative w-40 h-40 flex items-center justify-center">
+                    <div className="z-20 p-4 bg-white rounded-full shadow-xl relative" style={{ animation: 'pulse-glow 2s infinite ease-in-out' }}>
+                        <Sparkles size={32} className="text-indigo-500 fill-indigo-100 stroke-indigo-600" />
+                    </div>
+                    <div className="absolute top-1/2 left-1/2 -ml-3 -mt-3 z-10" style={{ animation: 'orbit 3s linear infinite' }}>
+                        <div className="bg-white p-2 rounded-full shadow-md"><Paintbrush size={20} className="text-purple-500 transform -rotate-45" /></div>
+                    </div>
+                    <div className="absolute top-1/2 left-1/2 -ml-3 -mt-3 z-10" style={{ animation: 'orbit-reverse 4s linear infinite' }}>
+                        <div className="bg-white p-2 rounded-full shadow-md"><Palette size={20} className="text-indigo-500" /></div>
+                    </div>
+                    <div className="absolute text-yellow-400 text-lg font-bold" style={{ top: '60%', left: '40%', animation: 'float-up 2s infinite ease-in' }}>✦</div>
+                    <div className="absolute text-pink-400 text-sm" style={{ top: '60%', left: '60%', animation: 'float-up 2.5s infinite ease-in 0.5s' }}>★</div>
+                    <div className="absolute text-blue-400 text-xs" style={{ top: '50%', left: '30%', animation: 'float-up 3s infinite ease-in 1s' }}>●</div>
+                </div>
+                <div className="text-center z-10 mt-4">
+                    <p className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-pink-600 animate-pulse">예술적인 마법을 부리는 중...</p>
+                    <p className="text-xs text-gray-400 mt-1">최고의 작품을 위해 물감을 섞고 있어요!</p>
+                </div>
+            </div>
+        );
+
+        // --- Image Compression Utility ---
+        const compressImage = (base64Str, maxWidth = 800, quality = 0.7) => {
+            return new Promise((resolve) => {
+                const img = new window.Image();
+                img.src = base64Str;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+                    if (width > maxWidth) {
+                        height *= maxWidth / width;
+                        width = maxWidth;
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', quality));
+                };
+            });
+        };
+
+        // --- Mobile View Component (Exhibition Mode) ---
+        const MobileUploadView = ({ sessionId, fb, user, onClose }) => {
+            const [uploadProgress, setUploadProgress] = useState(0);
+            const [errorMsg, setErrorMsg] = useState('');
+            const inputRef = useRef(null);
+
+            const handleUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                if (!fb || !user) {
+                    setErrorMsg("서버(Firebase) 연결이 필요합니다.");
+                    return;
+                }
+
+                setUploadProgress(10);
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                    setUploadProgress(30);
+                    const rawBase64 = reader.result;
+                    try {
+                        setUploadProgress(50);
+                        const compressedBase64 = await compressImage(rawBase64, 800, 0.7);
+                        setUploadProgress(80);
+                        
+                        const appId = 'default-app-id';
+                        await setDoc(doc(fb.db, 'artifacts', appId, 'public', 'data', 'qr_uploads', sessionId), {
+                            image: compressedBase64,
+                            timestamp: new Date().toISOString()
+                        });
+                        setUploadProgress(100);
+                    } catch (err) {
+                        console.error(err);
+                        setErrorMsg("업로드 실패: 권한이 없거나 설정 오류입니다.");
+                        setUploadProgress(0);
+                    }
+                };
+                reader.readAsDataURL(file);
+            };
+
+            return (
+                <div className="w-full h-full bg-gradient-to-b from-indigo-500 to-purple-600 flex flex-col relative overflow-hidden text-white">
+                    <div className="p-6 pt-10 flex justify-center">
+                        <div className="flex items-center gap-2 bg-white/20 backdrop-blur-md px-4 py-2 rounded-full">
+                            <Sparkles size={16} />
+                            <span className="font-bold text-sm">AI Style Studio</span>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+                        <div className="bg-white p-6 rounded-3xl shadow-2xl text-gray-800 w-full max-w-sm">
+                            <div className="bg-indigo-50 p-4 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
+                                <Camera size={36} className="text-indigo-600" />
+                            </div>
+                            
+                            <h3 className="text-2xl font-extrabold mb-2">사진 업로드</h3>
+                            <p className="text-gray-500 text-sm mb-6">
+                                셀카나 인물 사진을 올려주세요.<br/>
+                                AI가 멋진 그림으로 그려드립니다!
+                            </p>
+                            
+                            {uploadProgress === 100 ? (
+                                <div className="space-y-4 animate-in zoom-in duration-300">
+                                    <div className="flex justify-center">
+                                        <div className="bg-green-100 p-3 rounded-full">
+                                            <Check size={40} className="text-green-600" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p className="text-lg font-bold text-indigo-900">전송 완료!</p>
+                                        <p className="text-sm text-gray-500 mt-1">
+                                            앞에 있는 화면(스크린)을<br/>확인해주세요.
+                                        </p>
+                                    </div>
+                                    <button onClick={() => setUploadProgress(0)} className="mt-4 text-sm text-indigo-600 font-medium hover:underline flex items-center justify-center gap-1">
+                                        <RotateCcw size={14} /> 다른 사진 다시 올리기
+                                    </button>
+                                </div>
+                            ) : (
+                                <>
+                                    <button 
+                                        onClick={() => inputRef.current?.click()}
+                                        disabled={uploadProgress > 0}
+                                        className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-base transition-all transform active:scale-95"
+                                    >
+                                        {uploadProgress > 0 ? (
+                                            <><Loader2 className="animate-spin" size={20} /> 전송 중 {uploadProgress}%</>
+                                        ) : (
+                                            <>사진 촬영 / 앨범 선택</>
+                                        )}
+                                    </button>
+                                    <input type="file" ref={inputRef} onChange={handleUpload} accept="image/*" className="hidden" />
+                                </>
+                            )}
+                            
+                            {errorMsg && <p className="text-xs text-red-500 mt-3 font-medium bg-red-50 p-2 rounded-lg">{errorMsg}</p>}
+                        </div>
+                    </div>
+                    
+                    <div className="p-6 text-center text-white/60 text-xs">
+                        © AI Style Studio Exhibition Mode
+                    </div>
+
+                    {onClose && (
+                        <button onClick={onClose} className="absolute top-4 right-4 bg-black/20 hover:bg-black/30 text-white rounded-full p-2 backdrop-blur">
+                            <X size={20} />
+                        </button>
+                    )}
+                </div>
+            );
+        };
+
+        // --- Main App Component ---
+        const App = () => {
+            // States
+            const [uploadedImage, setUploadedImage] = useState(null);
+            const [imageMimeType, setImageMimeType] = useState('image/jpeg');
+            const [imageOrientation, setImageOrientation] = useState('portrait');
+            const [selectedStyles, setSelectedStyles] = useState([]);
+            const [generatedImages, setGeneratedImages] = useState([]);
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [previewImage, setPreviewImage] = useState(null);
+            const [errorMsg, setErrorMsg] = useState('');
+            const [history, setHistory] = useState([]);
+            const [showConfig, setShowConfig] = useState(false);
+            
+            // Config States
+            const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+            const [firebaseConfig, setFirebaseConfig] = useState(() => {
+                const saved = localStorage.getItem('firebase_config');
+                return saved ? JSON.parse(saved) : null;
+            });
+
+            // QR & Mobile States
+            const [showQR, setShowQR] = useState(false);
+            const [qrSessionId, setQrSessionId] = useState('');
+            const [isMobileMode, setIsMobileMode] = useState(false);
+            const [showSimulator, setShowSimulator] = useState(false);
+
+            // Firebase
+            const [fb, setFb] = useState(null);
+            const [user, setUser] = useState(null);
+
+            const fileInputRef = useRef(null);
+
+            // --- Initial Setup ---
+            useEffect(() => {
+                const params = new URLSearchParams(window.location.search);
+                const session = params.get('session');
+                
+                if (session) {
+                    setIsMobileMode(true);
+                    setQrSessionId(session);
+                }
+
+                // Initialize Firebase if config exists
+                if (firebaseConfig) {
+                    try {
+                        const app = initializeApp(firebaseConfig);
+                        const auth = getAuth(app);
+                        const db = getFirestore(app);
+                        setFb({ app, auth, db });
+                        signInAnonymously(auth).catch(e => console.error("Auth Error", e));
+                        onAuthStateChanged(auth, (u) => setUser(u));
+                    } catch (e) {
+                        console.error("Firebase Init Failed", e);
+                        setErrorMsg("Firebase 설정 오류. 설정을 확인해주세요.");
+                    }
+                }
+            }, [firebaseConfig]);
+
+            // --- Firestore Listener (PC Mode) ---
+            useEffect(() => {
+                if (!fb || !user || isMobileMode || !qrSessionId) return;
+                
+                const appId = 'default-app-id';
+                const docRef = doc(fb.db, 'artifacts', appId, 'public', 'data', 'qr_uploads', qrSessionId);
+
+                const unsubscribe = onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.image) {
+                            const img = new window.Image();
+                            img.onload = () => {
+                                const orientation = img.width > img.height ? 'landscape' : 'portrait';
+                                setImageOrientation(orientation);
+                                setUploadedImage(data.image);
+                                setShowQR(false); 
+                                setShowSimulator(false); 
+                                setErrorMsg('');
+                            };
+                            img.src = data.image;
+                        }
+                    }
+                }, (error) => {
+                    console.error("Firestore listener error:", error);
+                });
+
+                return () => unsubscribe();
+            }, [fb, user, qrSessionId, isMobileMode]);
+
+            // --- Paste Event Listener ---
+            useEffect(() => {
+                const handlePaste = (e) => {
+                    const items = e.clipboardData.items;
+                    for (let i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf('image') !== -1) {
+                            const blob = items[i].getAsFile();
+                            processFile(blob);
+                            break;
+                        }
+                    }
+                };
+                window.addEventListener('paste', handlePaste);
+                return () => window.removeEventListener('paste', handlePaste);
+            }, []); 
+
+            // --- Handlers ---
+            const saveConfig = (key, config) => {
+                setApiKey(key);
+                localStorage.setItem('gemini_api_key', key);
+                
+                if (config) {
+                    setFirebaseConfig(config);
+                    localStorage.setItem('firebase_config', JSON.stringify(config));
+                }
+                setShowConfig(false);
+            };
+
+            const processFile = (file) => {
+                if (file.size > 10 * 1024 * 1024) { 
+                    setErrorMsg('이미지 용량은 10MB 이하여야 합니다.');
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const img = new window.Image();
+                    img.onload = () => {
+                        const orientation = img.width > img.height ? 'landscape' : 'portrait';
+                        if (!isMobileMode) setImageOrientation(orientation);
+                        setUploadedImage(reader.result);
+                        setErrorMsg('');
+                        if (!isMobileMode) setGeneratedImages([]);
+                    };
+                    img.src = reader.result;
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const handleFileChange = (e) => {
+                const file = e.target.files[0];
+                if (file) processFile(file);
+            };
+
+            const openQRModal = () => {
+                if (!fb) {
+                    if (confirm("QR 업로드를 사용하려면 Firebase 설정이 필요합니다. 설정창을 여시겠습니까?")) {
+                        setShowConfig(true);
+                    }
+                    return;
+                }
+                const newSessionId = Math.random().toString(36).substring(2, 10);
+                setQrSessionId(newSessionId);
+                setShowQR(true);
+            };
+
+            const handleReset = () => {
+                setUploadedImage(null);
+                setSelectedStyles([]);
+                setGeneratedImages([]);
+                setErrorMsg('');
+                if (fileInputRef.current) fileInputRef.current.value = '';
+            };
+
+            const handleClearHistory = () => {
+                if (confirm('모든 작업 기록을 삭제하시겠습니까?')) setHistory([]);
+            };
+
+            const loadHistoryItem = (item) => {
+                setGeneratedImages(item.images);
+                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            };
+
+            const toggleStyle = (styleId) => {
+                if (selectedStyles.includes(styleId)) {
+                    setSelectedStyles(selectedStyles.filter(id => id !== styleId));
+                } else {
+                    if (selectedStyles.length < 4) {
+                        setSelectedStyles([...selectedStyles, styleId]);
+                    }
+                }
+            };
+
+            const getTimestamp = () => {
+                const now = new Date();
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                return `${hours}${minutes}`;
+            };
+
+            const handleDownload = (dataUrl, filename) => {
+                const link = document.createElement('a');
+                link.href = dataUrl;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const handleDownloadAll = () => {
+                const timestamp = getTimestamp();
+                generatedImages.forEach((img, index) => {
+                    setTimeout(() => {
+                        handleDownload(img.imageData, `${timestamp}_AI-Art-${img.styleId}.png`);
+                    }, index * 500); 
+                });
+            };
+
+            const handlePrint = (imageData) => {
+                const printWindow = window.open('', '_blank');
+                if (!printWindow) {
+                    alert("팝업 차단이 설정되어 있어 인쇄 창을 열 수 없습니다. 팝업 차단을 해제해주세요.");
+                    return;
+                }
+                const pageOrientation = imageOrientation === 'landscape' ? 'landscape' : 'portrait';
+                printWindow.document.write(`
+                    <!DOCTYPE html><html><head><title>Print</title><style>
+                    @page { size: A6 ${pageOrientation}; margin: 0; }
+                    body, html { margin: 0; padding: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; background-color: white; }
+                    img { max-width: 100%; max-height: 100%; object-fit: contain; }
+                    @media print { body { -webkit-print-color-adjust: exact; } }
+                    </style></head><body><img src="${imageData}" /><script>
+                    window.onload = function() { setTimeout(function() { window.print(); }, 500); }
+                    </script></body></html>`);
+                printWindow.document.close();
+            };
+
+            // Navigation Handlers for Lightbox
+            const handleNextPreview = (e) => {
+                e.stopPropagation();
+                if (generatedImages.length <= 1) return;
+                const currentIndex = generatedImages.findIndex(img => img.styleId === previewImage.styleId);
+                const nextIndex = (currentIndex + 1) % generatedImages.length;
+                setPreviewImage(generatedImages[nextIndex]);
+            };
+
+            const handlePrevPreview = (e) => {
+                e.stopPropagation();
+                if (generatedImages.length <= 1) return;
+                const currentIndex = generatedImages.findIndex(img => img.styleId === previewImage.styleId);
+                const prevIndex = (currentIndex - 1 + generatedImages.length) % generatedImages.length;
+                setPreviewImage(generatedImages[prevIndex]);
+            };
+
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (!previewImage) return;
+                    if (e.key === 'ArrowRight') {
+                        const currentIndex = generatedImages.findIndex(img => img.styleId === previewImage.styleId);
+                        const nextIndex = (currentIndex + 1) % generatedImages.length;
+                        setPreviewImage(generatedImages[nextIndex]);
+                    } else if (e.key === 'ArrowLeft') {
+                        const currentIndex = generatedImages.findIndex(img => img.styleId === previewImage.styleId);
+                        const prevIndex = (currentIndex - 1 + generatedImages.length) % generatedImages.length;
+                        setPreviewImage(generatedImages[prevIndex]);
+                    } else if (e.key === 'Escape') {
+                        setPreviewImage(null);
+                    }
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [previewImage, generatedImages]);
+
+
+            // Gemini API Logic
+            const callGeminiAPI = async (modelId, prompt, base64Data, mimeType) => {
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
+                const payload = {
+                    contents: [{
+                        parts: [
+                            { text: prompt },
+                            { inlineData: { mimeType: mimeType, data: base64Data } }
+                        ]
+                    }],
+                    generationConfig: {
+                        responseModalities: ["TEXT", "IMAGE"],
+                        temperature: 0.5, 
+                        candidateCount: 1,
+                    },
+                    safetySettings: [
+                        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                    ]
+                };
+
+                const fetchUrl = `${apiUrl}?key=${apiKey}`;
+
+                const response = await fetch(fetchUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error(`API Error: ${response.status}`);
+                const result = await response.json();
+                const imagePart = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+                if (imagePart) return `data:image/png;base64,${imagePart.inlineData.data}`;
+                throw new Error("No image data in response");
+            };
+
+            const generateImages = async () => {
+                if (!apiKey) {
+                    setShowConfig(true);
+                    return;
+                }
+                if (!uploadedImage) { setErrorMsg('변환할 이미지를 먼저 업로드해주세요.'); return; }
+                if (selectedStyles.length === 0) { setErrorMsg('최소 1개 이상의 스타일을 선택해주세요.'); return; }
+
+                setIsGenerating(true);
+                setErrorMsg('');
+                setGeneratedImages([]);
+                const base64Data = uploadedImage.split(',')[1];
+                
+                try {
+                    const promises = selectedStyles.map(async (styleId) => {
+                        const styleData = PRESET_STYLES.find(s => s.id === styleId);
+                        const modelToUse = 'gemini-2.0-flash-exp'; // UPDATED MODEL NAME FOR SAFETY
+                        const orientationText = imageOrientation === 'landscape' ? 'horizontal landscape (A6 aspect ratio)' : 'vertical portrait (A6 aspect ratio)';
+                        const finalPrompt = `TRANSFORM THIS IMAGE INTO THE ART STYLE OF: ${styleData.prompt}. CRITICAL: Apply the style EXTREMELY INTENSELY. Keep the main subject recognizable but REDRAW everything else. IMPORTANT: Zoom in or crop if needed for better composition. Output high-quality ${orientationText}. ${styleData.id === 'inkwash' ? 'STRICTLY BLACK AND WHITE.' : ''}`;
+
+                        try {
+                            const imageData = await callGeminiAPI(modelToUse, finalPrompt, base64Data, imageMimeType);
+                            return { styleId: styleData.id, styleName: styleData.name, imageData, orientation: imageOrientation };
+                        } catch (err) {
+                            console.error(`Model generation failed for ${styleData.name}:`, err);
+                            return null;
+                        }
+                    });
+
+                    const results = await Promise.all(promises);
+                    const successfulImages = results.filter(img => img !== null);
+                    
+                    if (successfulImages.length === 0) setErrorMsg('이미지 생성에 실패했습니다. API 키를 확인하거나 잠시 후 다시 시도하세요.');
+                    else {
+                        setGeneratedImages(successfulImages);
+                        const newHistoryItem = { id: Date.now(), date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), images: successfulImages, thumbnail: successfulImages[0].imageData };
+                        setHistory(prev => [newHistoryItem, ...prev]);
+                    }
+                } catch (e) { setErrorMsg('오류가 발생했습니다.'); } 
+                finally { setIsGenerating(false); }
+            };
+
+            // --- Mobile View Rendering ---
+            if (isMobileMode) {
+                return <MobileUploadView sessionId={qrSessionId} fb={fb} user={user} onClose={() => {}} />;
+            }
+
+            // --- PC View Rendering ---
+            return (
+                <div className="min-h-screen bg-gray-50 text-slate-800 font-sans selection:bg-indigo-100 pb-20 relative">
+                    {showConfig && <ConfigModal onSave={saveConfig} onClose={() => setShowConfig(false)} initialKey={apiKey} initialConfig={firebaseConfig} />}
+
+                    <header className="bg-white shadow-sm border-b border-gray-100 sticky top-0 z-20">
+                        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <div className="bg-indigo-600 text-white p-1.5 rounded-lg"><Sparkles size={20} /></div>
+                                <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">AI Style Studio <span className="text-xs font-medium text-gray-400 border border-gray-200 rounded px-1.5 py-0.5 ml-1">A6 Edition</span></h1>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setShowConfig(true)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full" title="설정"><Settings size={20} /></button>
+                                <button onClick={handleReset} className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-red-500 transition-colors"><RotateCcw size={16} /><span className="hidden sm:inline">초기화</span></button>
+                            </div>
+                        </div>
+                        {/* History Bar */}
+                        {history.length > 0 && (
+                            <div className="bg-gray-50 border-b border-gray-200">
+                                <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-4">
+                                    <div className="flex items-center gap-2 text-xs font-bold text-gray-500 whitespace-nowrap"><Clock size={14} /> 이전 작업</div>
+                                    <div className="flex-1 overflow-x-auto whitespace-nowrap scrollbar-hide flex gap-3 py-1">
+                                        {history.map(item => (
+                                            <button key={item.id} onClick={() => loadHistoryItem(item)} className="group relative w-12 h-12 flex-shrink-0 rounded-lg overflow-hidden border-2 border-white shadow-sm hover:border-indigo-500 hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                                <img src={item.thumbnail} alt="History" className="w-full h-full object-cover" />
+                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors"></div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <button onClick={handleClearHistory} className="p-1.5 text-gray-400 hover:text-red-500 rounded-full hover:bg-red-50 transition-colors"><Trash2 size={14} /></button>
+                                </div>
+                            </div>
+                        )}
+                    </header>
+
+                    <main className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+                        {/* QR Modal */}
+                        {showQR && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in">
+                                <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center relative">
+                                    <button onClick={() => setShowQR(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={24} /></button>
+                                    <h3 className="text-xl font-bold text-gray-800 mb-4">스마트폰으로 스캔하세요</h3>
+                                    <div className="bg-white p-2 border-2 border-dashed border-indigo-200 rounded-xl inline-block mb-4">
+                                        <img 
+                                            src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(window.location.href + '?session=' + qrSessionId)}`} 
+                                            alt="Scan QR" 
+                                            className="w-48 h-48"
+                                        />
+                                    </div>
+                                    <div className="bg-orange-50 border border-orange-200 p-4 rounded-xl text-xs text-left text-orange-800 mb-4">
+                                        <strong>⚠️ 주의:</strong><br/>
+                                        스마트폰도 동일한 Wifi/네트워크 환경이거나, 이 사이트가 공개된 URL이어야 접속 가능합니다.
+                                    </div>
+                                    <button 
+                                        onClick={() => setShowSimulator(true)}
+                                        className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-colors shadow-md"
+                                    >
+                                        <Smartphone size={18} /> 가상 스마트폰 열기 (테스트)
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Simulator Overlay */}
+                        {showSimulator && (
+                            <div className="fixed bottom-8 right-8 z-[60] w-[320px] h-[640px] bg-black rounded-[40px] border-8 border-black shadow-2xl overflow-hidden ring-4 ring-gray-200 animate-in slide-in-from-bottom-10 fade-in duration-300">
+                                <MobileUploadView sessionId={qrSessionId} fb={fb} user={user} onClose={() => setShowSimulator(false)} />
+                            </div>
+                        )}
+
+                        {/* Upload Section */}
+                        <section className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 text-center">
+                            {!uploadedImage ? (
+                                <div className="flex flex-col gap-4">
+                                    <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-gray-300 rounded-xl p-12 cursor-pointer hover:border-indigo-500 hover:bg-indigo-50/50 transition-all group">
+                                        <div className="w-16 h-16 bg-indigo-50 text-indigo-500 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform"><Upload size={32} /></div>
+                                        <h3 className="text-lg font-semibold text-gray-700 mb-2">PC에서 사진 업로드</h3>
+                                        <p className="text-sm text-gray-500">클릭, 드래그, 또는 붙여넣기 (Ctrl+V)</p>
+                                    </div>
+                                    <div className="flex items-center gap-4 before:h-px before:flex-1 before:bg-gray-200 after:h-px after:flex-1 after:bg-gray-200 text-sm text-gray-400">OR</div>
+                                    <button 
+                                        onClick={openQRModal}
+                                        className="w-full py-4 border border-gray-300 hover:border-indigo-500 hover:text-indigo-600 rounded-xl flex items-center justify-center gap-2 text-gray-600 font-medium transition-all"
+                                    >
+                                        <QrCode size={20} />
+                                        스마트폰 QR 코드로 업로드
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col items-center gap-4">
+                                    <div className="relative group">
+                                        <img src={uploadedImage} alt="Original" className="max-h-64 rounded-lg shadow-md object-contain"/>
+                                        <button onClick={() => { setUploadedImage(null); setGeneratedImages([]); }} className="absolute -top-2 -right-2 bg-red-500 text-white p-1.5 rounded-full shadow-lg hover:bg-red-600 transition-colors"><X size={16} /></button>
+                                    </div>
+                                    <p className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-1 rounded-full">원본 이미지 ({imageMimeType})</p>
+                                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs animate-in fade-in bg-indigo-50 text-indigo-700">
+                                        <Zap size={14} className="fill-current" /> 
+                                        적용 엔진: <strong>Nano Banana (Gemini)</strong>
+                                        <span className="mx-1 text-gray-300">|</span>
+                                        <span>{imageOrientation === 'landscape' ? '가로형' : '세로형'} A6 출력</span>
+                                    </div>
+                                </div>
+                            )}
+                            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+                        </section>
+
+                        {/* Style Selection */}
+                        <section>
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Palette size={20} className="text-indigo-600"/> 스타일 선택</h2>
+                                <span className={`text-sm font-medium px-2 py-1 rounded-md ${selectedStyles.length === 4 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{selectedStyles.length} / 4 선택됨</span>
+                            </div>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                {PRESET_STYLES.map((style) => {
+                                    const isSelected = selectedStyles.includes(style.id);
+                                    const isDisabled = !isSelected && selectedStyles.length >= 4;
+                                    return (
+                                        <button key={style.id} onClick={() => toggleStyle(style.id)} disabled={isDisabled}
+                                            className={`relative p-4 rounded-xl text-left transition-all duration-200 border ${isSelected ? 'border-indigo-600 bg-indigo-50 shadow-md ring-1 ring-indigo-600' : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'} ${isDisabled ? 'opacity-50 cursor-not-allowed grayscale' : 'cursor-pointer'}`}>
+                                            <div className="flex justify-between items-start mb-2">
+                                                <span className={`text-sm font-bold ${isSelected ? 'text-indigo-700' : 'text-gray-700'}`}>{style.name.split(' (')[0]}</span>
+                                                {isSelected && <Check size={16} className="text-indigo-600" />}
+                                            </div>
+                                            <p className={`text-[10px] line-clamp-2 ${isSelected ? 'text-indigo-600/80' : 'text-gray-400'}`}>{style.name.split('(')[1].replace(')', '')} 스타일</p>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </section>
+
+                        {/* Action Button */}
+                        <div className="flex flex-col items-center gap-4">
+                            {errorMsg && <div className="text-red-500 bg-red-50 px-4 py-2 rounded-lg text-sm font-medium animate-pulse text-center">{errorMsg}</div>}
+                            <button onClick={generateImages} disabled={isGenerating || !uploadedImage || selectedStyles.length === 0}
+                                className={`w-full md:w-auto px-8 py-4 rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all ${isGenerating ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-xl hover:scale-[1.02]'}`}>
+                                {isGenerating ? <FunLoader /> : <> <Sparkles className="fill-current" /> 선택한 4가지 스타일로 생성하기 </>}
+                            </button>
+                            {!apiKey && <p className="text-xs text-red-500">* 우측 상단 톱니바퀴를 눌러 API 키를 설정해주세요.</p>}
+                        </div>
+
+                        {/* Results */}
+                        {generatedImages.length > 0 && (
+                            <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                <div className="flex items-center justify-between mb-6">
+                                    <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2"><ImageIcon size={20} className="text-indigo-600"/> 생성 결과 ({generatedImages[0].orientation === 'landscape' ? '가로형' : '세로형'} A6)</h2>
+                                    <button onClick={handleDownloadAll} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold shadow-md transition-all hover:scale-105"><Download size={16} /> 전체 저장</button>
+                                </div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                                    {generatedImages.map((img, idx) => (
+                                        <div key={idx} className="group relative bg-white rounded-xl shadow-md overflow-hidden border border-gray-100 hover:shadow-xl transition-shadow">
+                                            <div className={`relative w-full bg-gray-100 overflow-hidden cursor-zoom-in ${img.orientation === 'landscape' ? 'pb-[70.7%]' : 'pb-[141.4%]'}`} onClick={() => setPreviewImage(img)}>
+                                                <img src={img.imageData} alt={img.styleName} className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"/>
+                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"><Maximize2 className="text-white drop-shadow-md" size={32}/></div>
+                                            </div>
+                                            <div className="p-3 border-t border-gray-100">
+                                                <p className="text-xs font-bold text-gray-700 mb-2 truncate flex justify-between"><span>{img.styleName}</span></p>
+                                                <button onClick={(e) => { e.stopPropagation(); const timestamp = getTimestamp(); handleDownload(img.imageData, `${timestamp}_AI-Art-${img.styleId}.png`); }} className="w-full flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 rounded-lg text-xs font-semibold transition-colors"><Download size={14} /> 다운로드</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        )}
+                    </main>
+
+                    {/* Lightbox */}
+                    {previewImage && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md p-4 animate-in fade-in duration-300" onClick={() => setPreviewImage(null)}>
+                            <button onClick={() => setPreviewImage(null)} className="absolute top-6 right-6 text-white/70 hover:text-white bg-white/10 hover:bg-white/20 p-2 rounded-full transition-all z-50"><X size={32} /></button>
+                            
+                            {generatedImages.length > 1 && (
+                                <>
+                                    <button onClick={handlePrevPreview} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/70 hover:text-white bg-white/10 hover:bg-white/20 p-3 rounded-full transition-all z-50 backdrop-blur-md hover:scale-110"><ChevronLeft size={48} /></button>
+                                    <button onClick={handleNextPreview} className="absolute right-4 top-1/2 -translate-y-1/2 text-white/70 hover:text-white bg-white/10 hover:bg-white/20 p-3 rounded-full transition-all z-50 backdrop-blur-md hover:scale-110"><ChevronRight size={48} /></button>
+                                </>
+                            )}
+
+                            <div className="relative w-full max-w-5xl h-full max-h-[95vh] flex flex-col items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                                <div className="relative w-full h-full flex items-center justify-center">
+                                    <img src={previewImage.imageData} alt="Full Preview" onClick={() => setPreviewImage(null)} className="max-w-full max-h-full rounded-lg shadow-2xl border-2 border-white/20 object-contain cursor-zoom-out"/>
+                                </div>
+                                <div className="absolute bottom-8 flex gap-4 animate-in slide-in-from-bottom-4 duration-500">
+                                    <span className="text-white font-medium text-lg bg-black/60 px-6 py-3 rounded-full backdrop-blur border border-white/10">{previewImage.styleName}</span>
+                                    <button onClick={() => { const timestamp = getTimestamp(); handleDownload(previewImage.imageData, `${timestamp}_AI-Art-${previewImage.styleId}-HighRes.png`); }} className="bg-white text-black hover:bg-indigo-50 px-8 py-3 rounded-full font-bold flex items-center gap-2 shadow-lg transition-transform hover:scale-105"><Download size={20} /> 저장하기</button>
+                                    <button onClick={() => handlePrint(previewImage.imageData)} className="bg-indigo-600 text-white hover:bg-indigo-700 px-8 py-3 rounded-full font-bold flex items-center gap-2 shadow-lg transition-transform hover:scale-105"><Printer size={20} /> 인쇄하기</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
